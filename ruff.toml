@@ -1,0 +1,45 @@
+# Ruff configuration — the lint half of the CI quality gate (M16).
+#
+# This file exists so the gate is *deterministic*. Without it Ruff falls back to
+# its built-in default rule set, which differs between Ruff releases and between
+# a developer's machine and the CI runner, so "ruff check passed locally" meant
+# very little. The rule set below is pinned and explained.
+
+target-version = "py312"
+line-length = 100
+
+# Generated, vendored or non-source trees.
+extend-exclude = [".venv", "venv", "__pycache__", "ui", "node_modules"]
+
+[lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes — real bugs: unused names, undefined names
+    "I",      # isort — deterministic import order
+    "UP",     # pyupgrade — keep to modern Python 3.12 idioms
+    "B",      # flake8-bugbear — likely bugs (mutable defaults, broad asserts)
+    "SIM",    # flake8-simplify
+    "G",      # flake8-logging-format — correct lazy %-style logging
+    "RUF",    # Ruff's own rules
+    "ASYNC",  # flake8-async — blocking calls inside async functions
+]
+
+ignore = [
+    # `Depends(...)` / `Query(...)` in a parameter default is *the* FastAPI
+    # idiom, not the mutable-default bug this rule is aimed at.
+    "B008",
+    # Long, deliberately worded messages in log calls and docstrings read better
+    # than the same text folded to fit a column limit.
+    "E501",
+]
+
+[lint.per-file-ignores]
+# Tests may assert on private helpers and use long descriptive names.
+"tests/**" = ["S101", "SLF001"]
+
+[lint.isort]
+known-first-party = ["approvalflow", "services"]
+
+[format]
+quote-style = "double"

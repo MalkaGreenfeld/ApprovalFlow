@@ -1,0 +1,29 @@
+{
+  "name": "approvalflow",
+  "private": true,
+  "version": "1.0.0",
+  "description": "AI-assisted invoice and expense approval platform",
+  "scripts": {
+    "up": "docker compose up -d --build",
+    "down": "docker compose down",
+    "reset": "docker compose down -v && docker compose up -d --build",
+    "logs": "docker compose logs -f --tail=100",
+    "verify": "python scripts/verify.py",
+    "verify:journey": "python scripts/verify.py --journey",
+    "eval": "python eval/harness.py",
+    "test": "pytest tests/unit tests/integration -v",
+    "test:unit": "pytest tests/unit -v",
+    "test:integration": "pytest tests/integration -v",
+    "test:ui": "npm --prefix ui test",
+    "lint": "ruff check services/ eval/ scripts/ tests/",
+    "typecheck": "mypy services/ --explicit-package-bases --ignore-missing-imports",
+    "check": "npm run lint && npm run typecheck && npm run test"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "jsdom": "^29.1.1",
+    "vitest": "^4.1.10"
+  }
+}

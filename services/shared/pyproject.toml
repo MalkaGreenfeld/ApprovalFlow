@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "approvalflow-shared"
+version = "1.0.0"
+description = "Shared contracts, policy engine, persistence and cross-cutting concerns"
+requires-python = ">=3.12"
+# Declared here rather than in each service's requirements.txt so all five
+# services provably run the same versions of the shared building blocks.
+dependencies = [
+    "pydantic>=2,<3",
+    "fastapi>=0.115,<0.121",
+    "python-json-logger>=3,<4",
+    "httpx>=0.28,<0.29",
+    # PostgreSQL access for the business records and the transactional outbox.
+    "asyncpg>=0.30,<0.31",
+    # Self-signed JWT authentication with roles (N1).
+    "pyjwt>=2.10,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.25",
+    "hypothesis>=6",
+]
+
+[tool.setuptools.packages.find]
+include = ["approvalflow*"]

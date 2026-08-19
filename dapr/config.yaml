@@ -1,0 +1,18 @@
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: approvalflow-config
+spec:
+  tracing:
+    # Sample everything: this is a demo system, and one complete end-to-end trace
+    # per request is the point (N4). The sidecars are started with
+    # `-config /dapr/config.yaml`; without that flag this file is never loaded,
+    # which is how tracing was configured but silently off before.
+    samplingRate: "1"
+    zipkin:
+      endpointAddress: "http://zipkin:9411/api/v2/spans"
+  logging:
+    level: info
+  features:
+    - name: proxy.grpc
+      enabled: false

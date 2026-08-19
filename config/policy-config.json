@@ -1,0 +1,187 @@
+{
+  "_about": "ApprovalFlow policy + autonomy configuration. THIS IS THE ONLY PLACE thresholds and rules are defined. It is the bootstrap copy: on first start each service seeds it into the Dapr state store under 'config:policy', and from then on the live copy is edited through PUT /api/admin/policy (admin role) with no rebuild and no restart (F7 / M13). Rules are evaluated in document order, first match wins. An outcome may only be 'human_review', 'reject' or 'duplicate' - configuration can restrict autonomy, never grant it (M12).",
+  "version": 1,
+  "updated_by": "bootstrap",
+  "updated_at": "2026-07-01T00:00:00+00:00",
+  "base_currency": "USD",
+  "fx_rates": {
+    "USD": "1.00",
+    "EUR": "1.08",
+    "GBP": "1.27",
+    "ILS": "0.27"
+  },
+  "receipt_required_above_usd": "25",
+  "autonomy": {
+    "_about": "The dilemma, expressed as data. Justified in docs/PRODUCT-DILEMMA.md and mirrored in policy.md section 6. Tier 1 (meals/travel/hardware) = 750, Tier 2 (saas/other) = 350. Hard-clamped by ABSOLUTE_MAX_CEILING_USD in approvalflow/policy.py.",
+    "confidence_threshold": "0.85",
+    "default_ceiling_usd": "350",
+    "category_ceilings_usd": {
+      "meals": "750",
+      "travel": "750",
+      "hardware": "750",
+      "saas": "350",
+      "other": "350"
+    }
+  },
+  "amendable_fields": [
+    "notes",
+    "attendees",
+    "receiptPresent",
+    "lineItems",
+    "taxAmount",
+    "total",
+    "category"
+  ],
+  "rules": [
+    {
+      "rule_id": "GLOBAL-DUP",
+      "outcome": "duplicate",
+      "reason": "Duplicate submission - same vendor, invoice number and total as an item already in flight.",
+      "categories": ["*"],
+      "when": { "field": "is_duplicate", "op": "is_true" }
+    },
+    {
+      "rule_id": "GLOBAL-MATH",
+      "outcome": "human_review",
+      "reason": "Line items plus tax do not reconcile to the declared total.",
+      "categories": ["*"],
+      "when": { "field": "math_ok", "op": "is_false" }
+    },
+    {
+      "rule_id": "GLOBAL-RECEIPT",
+      "outcome": "human_review",
+      "reason": "A receipt is required above the configured amount and none was attached.",
+      "categories": ["*"],
+      "when": {
+        "all": [
+          { "field": "receipt_present", "op": "is_false" },
+          { "field": "amount_usd", "op": "gt", "config_ref": "receipt_required_above_usd" }
+        ]
+      }
+    },
+    {
+      "rule_id": "GLOBAL-VENDOR",
+      "outcome": "human_review",
+      "reason": "New or unknown vendor - always reviewed by a human regardless of amount.",
+      "categories": ["*"],
+      "when": { "field": "vendor_known", "op": "is_false" }
+    },
+    {
+      "rule_id": "GLOBAL-FRAUD",
+      "outcome": "human_review",
+      "reason": "Fraud-pattern signal detected (round amount to a new vendor, missing line-item detail, or padded quantities).",
+      "categories": ["*"],
+      "when": {
+        "any": [
+          {
+            "all": [
+              { "field": "vendor_known", "op": "is_false" },
+              { "field": "amount_usd", "op": "multiple_of", "value": "100" }
+            ]
+          },
+          {
+            "all": [
+              { "field": "has_line_items", "op": "is_false" },
+              { "field": "amount_usd", "op": "gt", "value": "100" }
+            ]
+          },
+          {
+            "all": [
+              { "field": "line_item_count", "op": "eq", "value": 1 },
+              { "field": "max_line_quantity", "op": "gt", "value": "20" },
+              { "field": "has_undescribed_line_item", "op": "is_true" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "GLOBAL-FX",
+      "outcome": "human_review",
+      "reason": "Foreign-currency item converted to more than $1,000 - hard stop.",
+      "categories": ["*"],
+      "when": {
+        "all": [
+          { "field": "is_foreign_currency", "op": "is_true" },
+          { "field": "amount_usd", "op": "gt", "value": "1000" }
+        ]
+      }
+    },
+    {
+      "rule_id": "MEAL-03",
+      "outcome": "reject",
+      "reason": "Alcohol-only receipts are not reimbursable.",
+      "categories": ["meals"],
+      "when": {
+        "all": [
+          { "field": "has_line_items", "op": "is_true" },
+          { "field": "line_items", "op": "every_item_matches", "value": ["alcohol", "bar tab", "wine", "spirits"] }
+        ]
+      }
+    },
+    {
+      "rule_id": "MEAL-01",
+      "outcome": "human_review",
+      "reason": "Meal exceeds the per-attendee allowance, or the attendee count is missing.",
+      "categories": ["meals"],
+      "when": {
+        "any": [
+          { "field": "attendees", "op": "missing" },
+          { "field": "amount_per_attendee", "op": "gt", "value": "75" }
+        ]
+      }
+    },
+    {
+      "rule_id": "MEAL-02",
+      "outcome": "human_review",
+      "reason": "Client entertainment over $500 requires a business justification and a named client.",
+      "categories": ["meals"],
+      "when": {
+        "all": [
+          { "field": "amount_usd", "op": "gt", "value": "500" },
+          {
+            "any": [
+              { "not": { "field": "notes_text", "op": "contains_any", "value": ["client"] } },
+              { "field": "notes_text", "op": "contains_any", "value": ["no client", "without client", "client name not"] }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "TRAVEL-02",
+      "outcome": "human_review",
+      "reason": "Single travel expense over $1,500 requires manager approval.",
+      "categories": ["travel"],
+      "when": { "field": "amount_usd", "op": "gt", "value": "1500" }
+    },
+    {
+      "rule_id": "TRAVEL-03",
+      "outcome": "human_review",
+      "reason": "First or business class travel always requires approval.",
+      "categories": ["travel"],
+      "when": {
+        "any": [
+          { "field": "line_items_text", "op": "contains_any", "value": ["business class", "first class"] },
+          { "field": "notes_text", "op": "contains_any", "value": ["business class", "first class"] }
+        ]
+      }
+    },
+    {
+      "rule_id": "SAAS-01",
+      "outcome": "human_review",
+      "reason": "Subscription above the monthly SaaS cap.",
+      "categories": ["saas"],
+      "note": "The cap is per MONTH, so it is compared against the monthly equivalent: an annual plan is divided by 12. Comparing the invoice total would escalate every annual renewal.",
+      "when": { "field": "amount_usd_monthly", "op": "gt", "value": "200" }
+    },
+    {
+      "rule_id": "HW-02",
+      "outcome": "human_review",
+      "reason": "Hardware over $1,000 is a capital expense and is always human-approved.",
+      "categories": ["hardware"],
+      "also_cites": ["HW-01"],
+      "when": { "field": "amount_usd", "op": "gt", "value": "1000" }
+    }
+  ]
+}

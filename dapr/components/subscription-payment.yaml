@@ -1,0 +1,23 @@
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: payment-decision-auto-approved
+spec:
+  topic: decision.auto_approved
+  routes:
+    default: /events/decision-auto-approved
+  pubsubname: pubsub
+scopes:
+  - payment
+---
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: payment-decision-human-approved
+spec:
+  topic: decision.human_approved
+  routes:
+    default: /events/decision-human-approved
+  pubsubname: pubsub
+scopes:
+  - payment

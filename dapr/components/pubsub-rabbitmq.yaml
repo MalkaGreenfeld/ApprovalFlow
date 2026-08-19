@@ -1,0 +1,30 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: pubsub
+spec:
+  type: pubsub.rabbitmq
+  version: v1
+  metadata:
+    - name: host
+      value: "amqp://approvalflow:approvalflow@rabbitmq:5672"
+    - name: durable
+      value: "true"
+    - name: deletedWhenUnused
+      value: "false"
+    - name: autoAck
+      value: "false"
+    - name: deliveryMode
+      value: "2"
+    - name: requeueInFailure
+      value: "true"
+    - name: enableDeadLetter
+      value: "true"
+    - name: maxLen
+      value: "10000"
+scopes:
+  - ingestion
+  - agent
+  - router
+  - payment
+  - notification

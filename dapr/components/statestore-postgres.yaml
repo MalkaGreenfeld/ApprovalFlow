@@ -1,0 +1,36 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+spec:
+  type: state.postgresql
+  version: v1
+  metadata:
+    - name: connectionString
+      secretKeyRef:
+        name: postgres:connection_string
+        key: postgres:connection_string
+    - name: tableName
+      value: "dapr_state"
+    - name: keyType
+      value: "string"
+    - name: keyLength
+      value: "256"
+auth:
+  secretStore: secrets-store
+# What lives here (and why it is not in a table of its own):
+#   saga:{correlation_id}        - in-flight payment saga, survives a restart (M9/M11)
+#   budget:{department}          - the live counter, updated by ETag compare-and-set
+#   reservation:{saga_id}        - reservation lifecycle for compensation
+#   hitl:{correlation_id}        - durable human-in-the-loop pause token (M11)
+#   config:policy               - live policy + autonomy configuration (F7/M13)
+#   config:policy-document      - live policy prose the agent retrieves from (N5)
+# Business records that need joins and reporting live in real tables instead; see
+# db/init/001-schema.sql. The state store's query API is deliberately unused - the
+# PostgreSQL component does not implement it, so relying on it would be a trap.
+scopes:
+  - agent
+  - ingestion
+  - router
+  - payment
+  - notification

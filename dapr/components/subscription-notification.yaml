@@ -1,0 +1,133 @@
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: notification-decision-auto-approved
+spec:
+  topic: decision.auto_approved
+  routes:
+    default: /events/decision-auto-approved
+  pubsubname: pubsub
+scopes:
+  - notification
+---
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: notification-decision-escalated
+spec:
+  topic: decision.escalated
+  routes:
+    default: /events/decision-escalated
+  pubsubname: pubsub
+scopes:
+  - notification
+---
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: notification-decision-rejected
+spec:
+  topic: decision.rejected
+  routes:
+    default: /events/decision-rejected
+  pubsubname: pubsub
+scopes:
+  - notification
+---
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: notification-decision-duplicate
+spec:
+  topic: decision.duplicate
+  routes:
+    default: /events/decision-duplicate
+  pubsubname: pubsub
+scopes:
+  - notification
+---
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: notification-decision-human-approved
+spec:
+  topic: decision.human_approved
+  routes:
+    default: /events/decision-human-approved
+  pubsubname: pubsub
+scopes:
+  - notification
+---
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: notification-decision-human-rejected
+spec:
+  topic: decision.human_rejected
+  routes:
+    default: /events/decision-human-rejected
+  pubsubname: pubsub
+scopes:
+  - notification
+---
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: notification-decision-info-requested
+spec:
+  topic: decision.info_requested
+  routes:
+    default: /events/decision-info-requested
+  pubsubname: pubsub
+scopes:
+  - notification
+---
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: notification-payment-completed
+spec:
+  topic: payment.completed
+  routes:
+    default: /events/payment-completed
+  pubsubname: pubsub
+scopes:
+  - notification
+---
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: notification-payment-failed
+spec:
+  topic: payment.failed
+  routes:
+    default: /events/payment-failed
+  pubsubname: pubsub
+scopes:
+  - notification
+---
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: notification-payment-compensated
+spec:
+  topic: payment.compensated
+  routes:
+    default: /events/payment-compensated
+  pubsubname: pubsub
+scopes:
+  - notification
+---
+# Closes the open information request and attaches the submitter's answer to the
+# approver's queue entry, so the thread is visible when the item comes back (F5).
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: notification-submission-info-provided
+spec:
+  topic: submission.info_provided
+  routes:
+    default: /events/submission-info-provided
+  pubsubname: pubsub
+scopes:
+  - notification

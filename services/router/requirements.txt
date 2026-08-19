@@ -1,0 +1,11 @@
+# Service-specific dependencies. The shared building blocks (pydantic, fastapi,
+# httpx, asyncpg, pyjwt) are declared once in services/shared/pyproject.toml.
+#
+# M12: NO LLM CLIENT MAY BE ADDED TO THIS FILE.
+# The router is the deterministic decision authority. Its inability to call a
+# model is a structural guarantee, not a convention - the ceiling proof (F10)
+# rests on it. If a future change needs model output here, escalate the design
+# instead of adding a dependency.
+fastapi[standard]>=0.115,<0.121
+uvicorn>=0.34,<0.40
+dapr-ext-fastapi>=1.14,<2

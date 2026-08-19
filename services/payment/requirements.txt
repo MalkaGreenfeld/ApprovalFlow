@@ -1,0 +1,5 @@
+# Service-specific dependencies. The shared building blocks (pydantic, fastapi,
+# httpx, asyncpg, pyjwt) are declared once in services/shared/pyproject.toml.
+fastapi[standard]>=0.115,<0.121
+uvicorn>=0.34,<0.40
+dapr-ext-fastapi>=1.14,<2

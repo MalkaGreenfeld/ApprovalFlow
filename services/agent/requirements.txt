@@ -1,0 +1,9 @@
+# Service-specific dependencies. The shared building blocks (pydantic, fastapi,
+# httpx, asyncpg, pyjwt) are declared once in services/shared/pyproject.toml.
+fastapi[standard]>=0.115,<0.121
+uvicorn>=0.34,<0.40
+dapr-ext-fastapi>=1.14,<2
+# One client covers every OpenAI-compatible provider (OpenAI, Groq, OpenRouter,
+# Together, local Ollama/vLLM). Retrieval is pure Python - no vector database and
+# no embedding service is required for the offline path.
+openai>=1.60,<2

@@ -1,0 +1,483 @@
+# ApprovalFlow — the whole system, one command (M4):
+#   docker compose up -d --build
+#
+# Brings up PostgreSQL, RabbitMQ, the Dapr control plane and five Dapr-sidecar'd
+# services behind an NGINX gateway, plus Zipkin for distributed traces and the UI.
+#
+# The schema in db/init runs only on an empty data volume. After changing it:
+#   docker compose down -v && docker compose up -d --build
+
+x-dapr-sidecar: &dapr-sidecar
+  image: daprio/daprd:1.14.4
+  restart: unless-stopped
+  environment:
+    - HOST_ADDRESS=127.0.0.1
+  volumes:
+    - ./dapr/components:/components
+    - ./dapr/config.yaml:/dapr/config.yaml:ro
+    - secrets:/secrets
+
+x-service-env: &service-env
+  DAPR_HTTP_PORT: 3500
+  DAPR_GRPC_PORT: 50001
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: 5432
+  POSTGRES_USER: ${POSTGRES_USER:-approvalflow}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-approvalflow}
+  POSTGRES_DB: ${POSTGRES_DB:-approvalflow}
+  # Bootstrap policy configuration; the live copy lives in the Dapr state store.
+  POLICY_CONFIG_PATH: /app/config/policy-config.json
+  POLICY_CONFIG_TTL_SECONDS: ${POLICY_CONFIG_TTL_SECONDS:-5}
+  # N1. Leave enabled: turning it off opens every endpoint, including the one
+  # that changes the autonomy ceiling.
+  AUTH_ENABLED: ${AUTH_ENABLED:-true}
+  JWT_SECRET: ${JWT_SECRET:-dev-secret-do-not-use-in-production}
+  JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+  JWT_EXPIRATION_MINUTES: ${JWT_EXPIRATION_MINUTES:-60}
+
+services:
+  # ============================================================
+  # Infrastructure
+  # ============================================================
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: approvalflow-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-approvalflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-approvalflow}
+      POSTGRES_DB: ${POSTGRES_DB:-approvalflow}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-approvalflow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks: [approvalflow-net]
+
+  rabbitmq-init:
+    image: alpine:3.19
+    container_name: approvalflow-rabbitmq-init
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -f /var/lib/rabbitmq/.erlang.cookie ]; then
+          echo "${RABBITMQ_ERLANG_COOKIE:-secretcookie123}" > /var/lib/rabbitmq/.erlang.cookie
+          chmod 400 /var/lib/rabbitmq/.erlang.cookie
+          chown 999:999 /var/lib/rabbitmq/.erlang.cookie
+        fi
+    networks: [approvalflow-net]
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: approvalflow-rabbitmq
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-approvalflow}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-approvalflow}
+      RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE:-secretcookie123}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    depends_on:
+      rabbitmq-init:
+        condition: service_completed_successfully
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    restart: unless-stopped
+    healthcheck:
+      # `rabbitmqctl ping` answers as soon as the Erlang node is up, which is
+      # *before* the AMQP listener accepts connections — the Dapr sidecars then
+      # started against a closed port and died with "connection refused".
+      # check_port_connectivity waits for the listener itself.
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 300s
+    networks: [approvalflow-net]
+
+  placement:
+    image: daprio/dapr:1.14.4
+    container_name: approvalflow-placement
+    command: ["./placement", "-port", "50005"]
+    ports:
+      - "50005:50005"
+    restart: unless-stopped
+    networks: [approvalflow-net]
+
+  # Trace collector. dapr/config.yaml enables tracing at samplingRate 1 and needs
+  # somewhere to send spans; without this the setting was inert. One request is
+  # traceable end to end across all five services at http://localhost:9411.
+  zipkin:
+    image: openzipkin/zipkin-slim:3
+    container_name: approvalflow-zipkin
+    ports:
+      - "9411:9411"
+    restart: unless-stopped
+    networks: [approvalflow-net]
+
+  # Writes the file the Dapr local-file secret store reads. Values come from .env,
+  # so no credential is baked into an image or a component YAML.
+  secrets-loader:
+    image: alpine:3.19
+    container_name: approvalflow-secrets
+    volumes:
+      - secrets:/secrets
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        cat > /secrets/secrets.json <<EOF
+        {
+          "llm": {
+            "provider": "${LLM_PROVIDER:-stub}",
+            "api_key": "${LLM_API_KEY:-not-set}",
+            "model": "${LLM_MODEL:-}",
+            "base_url": "${LLM_BASE_URL:-}"
+          },
+          "jwt": {
+            "secret": "${JWT_SECRET:-dev-secret-do-not-use-in-production}",
+            "algorithm": "${JWT_ALGORITHM:-HS256}"
+          },
+          "postgres": {
+            "connection_string": "host=postgres user=${POSTGRES_USER:-approvalflow} password=${POSTGRES_PASSWORD:-approvalflow} dbname=${POSTGRES_DB:-approvalflow} port=5432"
+          }
+        }
+        EOF
+        # The Dapr sidecar image runs as the non-root user 65532, and it is the
+        # only process that needs to read this file. Hand it ownership and keep
+        # the file unreadable to everyone else: chmod 600 while owned by root
+        # (the previous behaviour) made every sidecar fail to start with
+        # "open /secrets/secrets.json: permission denied".
+        chown 65532:65532 /secrets/secrets.json
+        chmod 400 /secrets/secrets.json
+        echo "secrets.json written for uid 65532"
+    restart: "no"
+    networks: [approvalflow-net]
+
+  gateway:
+    image: nginx:1.27-alpine
+    container_name: approvalflow-gateway
+    ports:
+      - "8080:80"
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped
+    depends_on:
+      ingestion:
+        condition: service_started
+      notification:
+        condition: service_started
+      router:
+        condition: service_started
+    networks: [approvalflow-net]
+
+  # ============================================================
+  # Ingestion — intake, status, audit trail
+  # ============================================================
+  ingestion:
+    build:
+      context: .
+      dockerfile: ./services/ingestion/Dockerfile
+    container_name: approvalflow-ingestion
+    ports:
+      - "8001:8001"
+    restart: unless-stopped
+    environment:
+      <<: *service-env
+      OUTBOX_POLL_INTERVAL: ${OUTBOX_POLL_INTERVAL:-1.0}
+    volumes:
+      # Bind-mounted so the bootstrap policy can be edited without a rebuild.
+      - ./config:/app/config:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      secrets-loader:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks: [approvalflow-net]
+
+  ingestion-dapr:
+    <<: *dapr-sidecar
+    container_name: approvalflow-ingestion-dapr
+    command: ["./daprd",
+      "-app-id", "ingestion",
+      "-app-port", "8001",
+      "-dapr-http-port", "3500",
+      "-dapr-grpc-port", "50001",
+      "-placement-host-address", "placement:50005",
+      "-resources-path", "/components",
+      "-config", "/dapr/config.yaml",
+      "-app-health-check-path", "/health",
+      "-app-health-probe-interval", "5",
+      "-app-health-probe-timeout", "2000"]
+    depends_on:
+      ingestion:
+        condition: service_started
+      placement:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    network_mode: "service:ingestion"
+
+  # ============================================================
+  # Agent — policy retrieval and analysis (recommends only)
+  # ============================================================
+  agent:
+    build:
+      context: .
+      dockerfile: ./services/agent/Dockerfile
+    container_name: approvalflow-agent
+    ports:
+      - "8002:8002"
+    restart: unless-stopped
+    environment:
+      <<: *service-env
+      # Swap providers by configuration (M15): openai | groq | openrouter |
+      # together | local | stub. 'stub' is deterministic and offline.
+      LLM_PROVIDER: ${LLM_PROVIDER:-stub}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30}
+      POLICY_DOCUMENT_PATH: /app/policy.md
+      RAG_TOP_K: ${RAG_TOP_K:-6}
+    volumes:
+      - ./config:/app/config:ro
+      - ./policy.md:/app/policy.md:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      secrets-loader:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks: [approvalflow-net]
+
+  agent-dapr:
+    <<: *dapr-sidecar
+    container_name: approvalflow-agent-dapr
+    command: ["./daprd",
+      "-app-id", "agent",
+      "-app-port", "8002",
+      "-dapr-http-port", "3500",
+      "-dapr-grpc-port", "50001",
+      "-placement-host-address", "placement:50005",
+      "-resources-path", "/components",
+      "-config", "/dapr/config.yaml",
+      "-app-health-check-path", "/health",
+      "-app-health-probe-interval", "5",
+      "-app-health-probe-timeout", "2000"]
+    depends_on:
+      agent:
+        condition: service_started
+      placement:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    network_mode: "service:agent"
+
+  # ============================================================
+  # Router — deterministic decisions, policy admin, reports
+  # ============================================================
+  router:
+    build:
+      context: .
+      dockerfile: ./services/router/Dockerfile
+    container_name: approvalflow-router
+    ports:
+      - "8003:8003"
+    restart: unless-stopped
+    environment: *service-env
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      secrets-loader:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks: [approvalflow-net]
+
+  router-dapr:
+    <<: *dapr-sidecar
+    container_name: approvalflow-router-dapr
+    command: ["./daprd",
+      "-app-id", "router",
+      "-app-port", "8003",
+      "-dapr-http-port", "3500",
+      "-dapr-grpc-port", "50001",
+      "-placement-host-address", "placement:50005",
+      "-resources-path", "/components",
+      "-config", "/dapr/config.yaml",
+      "-app-health-check-path", "/health",
+      "-app-health-probe-interval", "5",
+      "-app-health-probe-timeout", "2000"]
+    depends_on:
+      router:
+        condition: service_started
+      placement:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    network_mode: "service:router"
+
+  # ============================================================
+  # Payment — saga with compensation
+  # ============================================================
+  payment:
+    build:
+      context: .
+      dockerfile: ./services/payment/Dockerfile
+    container_name: approvalflow-payment
+    ports:
+      - "8004:8004"
+    restart: unless-stopped
+    environment:
+      <<: *service-env
+      # Forced-failure invoices for the compensation journey (INV-1012).
+      PAYMENT_FAIL_INVOICE_NUMBERS: ${PAYMENT_FAIL_INVOICE_NUMBERS:-RS-90021}
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      secrets-loader:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks: [approvalflow-net]
+
+  payment-dapr:
+    <<: *dapr-sidecar
+    container_name: approvalflow-payment-dapr
+    command: ["./daprd",
+      "-app-id", "payment",
+      "-app-port", "8004",
+      "-dapr-http-port", "3500",
+      "-dapr-grpc-port", "50001",
+      "-placement-host-address", "placement:50005",
+      "-resources-path", "/components",
+      "-config", "/dapr/config.yaml",
+      "-app-health-check-path", "/health",
+      "-app-health-probe-interval", "5",
+      "-app-health-probe-timeout", "2000"]
+    depends_on:
+      payment:
+        condition: service_started
+      placement:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    network_mode: "service:payment"
+
+  # ============================================================
+  # Notification — approver queue, information requests
+  # ============================================================
+  notification:
+    build:
+      context: .
+      dockerfile: ./services/notification/Dockerfile
+    container_name: approvalflow-notification
+    ports:
+      - "8005:8005"
+    restart: unless-stopped
+    environment: *service-env
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      secrets-loader:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks: [approvalflow-net]
+
+  notification-dapr:
+    <<: *dapr-sidecar
+    container_name: approvalflow-notification-dapr
+    command: ["./daprd",
+      "-app-id", "notification",
+      "-app-port", "8005",
+      "-dapr-http-port", "3500",
+      "-dapr-grpc-port", "50001",
+      "-placement-host-address", "placement:50005",
+      "-resources-path", "/components",
+      "-config", "/dapr/config.yaml",
+      "-app-health-check-path", "/health",
+      "-app-health-probe-interval", "5",
+      "-app-health-probe-timeout", "2000"]
+    depends_on:
+      notification:
+        condition: service_started
+      placement:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    network_mode: "service:notification"
+
+  # ============================================================
+  # UI
+  # ============================================================
+  ui:
+    build:
+      context: .
+      dockerfile: ./ui/Dockerfile
+    container_name: approvalflow-ui
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    environment:
+      - VITE_API_URL=http://localhost:8080/api
+    depends_on:
+      - gateway
+    networks: [approvalflow-net]
+
+networks:
+  approvalflow-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  rabbitmq-data:
+  secrets:
