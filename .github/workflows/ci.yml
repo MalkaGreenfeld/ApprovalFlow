@@ -178,6 +178,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Lowercase the repository name
+        run: echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
       - name: Build and push ${{ matrix.service }}
         uses: docker/build-push-action@v6
         with:
@@ -185,8 +188,8 @@ jobs:
           file: ./services/${{ matrix.service }}/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}
-            ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.ref_name }}
+            ghcr.io/${{ env.REPO_LC }}/${{ matrix.service }}:${{ github.sha }}
+            ghcr.io/${{ env.REPO_LC }}/${{ matrix.service }}:${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -211,6 +214,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Lowercase the repository name
+        run: echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
       - name: Build and push ui
         uses: docker/build-push-action@v6
         with:
@@ -218,7 +224,7 @@ jobs:
           file: ./ui/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}/ui:${{ github.sha }}
-            ghcr.io/${{ github.repository }}/ui:${{ github.ref_name }}
+            ghcr.io/${{ env.REPO_LC }}/ui:${{ github.sha }}
+            ghcr.io/${{ env.REPO_LC }}/ui:${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
